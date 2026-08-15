@@ -1,0 +1,481 @@
+import React, { useState } from 'react';
+import { UserRole, StudentRecord, CurrentUser } from '../types';
+import { STUDY_GROUPS_LIST } from '../data/constants';
+import { 
+  GraduationCap, 
+  UserCheck, 
+  ShieldCheck, 
+  Lock, 
+  User, 
+  ArrowRight, 
+  HelpCircle, 
+  CheckCircle2, 
+  Sparkles,
+  School,
+  AlertCircle
+} from 'lucide-react';
+
+interface LoginViewProps {
+  students: StudentRecord[];
+  collegeName: string;
+  systemTitle: string;
+  academicYear: string;
+  onLoginSuccess: (user: CurrentUser) => void;
+}
+
+export const LoginView: React.FC<LoginViewProps> = ({
+  students,
+  collegeName,
+  systemTitle,
+  academicYear,
+  onLoginSuccess,
+}) => {
+  const [activeTab, setActiveTab] = useState<UserRole>('student');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleStudentLogin = (studentIdInput: string, passInput: string) => {
+    setErrorMsg('');
+    const cleanId = studentIdInput.trim();
+    const cleanPass = passInput.trim();
+
+    if (!cleanId || !cleanPass) {
+      setErrorMsg('กรุณากรอกรหัสนักศึกษา 11 หลักให้ครบถ้วน');
+      return;
+    }
+
+    if (cleanId !== cleanPass) {
+      setErrorMsg('สำหรับนักศึกษา รหัสผ่านต้องเป็นรหัสนักศึกษา 11 หลักของตนเอง');
+      return;
+    }
+
+    // Find student in directory
+    const found = students.find(s => s.studentId === cleanId);
+    if (found) {
+      onLoginSuccess({
+        role: 'student',
+        username: found.studentId,
+        displayName: `${found.prefix}${found.fullName}`,
+        studentData: found,
+      });
+    } else {
+      // If student not found in seed, create or alert
+      // Allow flexible login with dummy created profile if 11 digits
+      if (cleanId.length === 11 && /^\d+$/.test(cleanId)) {
+        const newStd: StudentRecord = {
+          id: `std-${cleanId}`,
+          studentId: cleanId,
+          prefix: 'นาย',
+          fullName: 'นักศึกษาใหม่ (ลงทะเบียน)',
+          educationLevel: 'ปวช.',
+          studyGroup: 'ช.3ชย.1',
+          department: 'ช่างยนต์',
+          vocationalCategory: 'อุตสาหกรรม',
+          studySystem: 'ปกติ',
+          phone: '',
+          lineId: '',
+          isUpdated: false,
+          updatedAt: null,
+          currentStatus: 'not_updated',
+        };
+        onLoginSuccess({
+          role: 'student',
+          username: cleanId,
+          displayName: `${newStd.prefix}${newStd.fullName}`,
+          studentData: newStd,
+        });
+      } else {
+        setErrorMsg('ไม่พบรหัสนักศึกษานี้ในระบบ (รหัสนักศึกษาต้องเป็นตัวเลข 11 หลัก เช่น 65201010001)');
+      }
+    }
+  };
+
+  const handleAdvisorLogin = (groupInput: string, passInput: string) => {
+    setErrorMsg('');
+    const cleanGroup = groupInput.trim();
+    const cleanPass = passInput.trim();
+
+    if (!cleanGroup) {
+      setErrorMsg('กรุณาระบุกลุ่มเรียน/แผนกวิชา');
+      return;
+    }
+
+    if (cleanPass !== '0001') {
+      setErrorMsg('รหัสผ่านครูที่ปรึกษาไม่ถูกต้อง (รหัสผ่านเริ่มต้นคือ: 0001)');
+      return;
+    }
+
+    const groupMeta = STUDY_GROUPS_LIST.find(g => g.code.toLowerCase() === cleanGroup.toLowerCase());
+    const groupName = groupMeta ? groupMeta.name : `กลุ่มเรียน ${cleanGroup}`;
+    const advisorName = groupMeta ? groupMeta.advisor : `ครูที่ปรึกษาประจำกลุ่ม ${cleanGroup}`;
+    const dept = groupMeta ? groupMeta.dept : 'แผนกวิชาช่าง';
+    const cat = groupMeta ? groupMeta.cat : 'อุตสาหกรรม';
+
+    onLoginSuccess({
+      role: 'advisor',
+      username: cleanGroup,
+      displayName: advisorName,
+      advisorData: {
+        username: cleanGroup,
+        name: advisorName,
+        department: dept,
+        studyGroup: cleanGroup,
+        category: cat,
+      }
+    });
+  };
+
+  const handleAdminLogin = (userInput: string, passInput: string) => {
+    setErrorMsg('');
+    const cleanUser = userInput.trim().toLowerCase();
+    const cleanPass = passInput.trim();
+
+    if (cleanUser === 'admin' && cleanPass === '4321') {
+      onLoginSuccess({
+        role: 'admin',
+        username: 'admin',
+        displayName: 'ผู้ดูแลระบบส่วนกลาง (Admin)',
+      });
+    } else {
+      setErrorMsg('Username หรือ Password ผู้ดูแลระบบไม่ถูกต้อง (admin / 4321)');
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setTimeout(() => {
+      if (activeTab === 'student') {
+        handleStudentLogin(username, password);
+      } else if (activeTab === 'advisor') {
+        handleAdvisorLogin(username, password);
+      } else if (activeTab === 'admin') {
+        handleAdminLogin(username, password);
+      }
+      setLoading(false);
+    }, 150);
+  };
+
+  // Quick helper selector for testing
+  const selectDemoStudent = (std: StudentRecord) => {
+    setUsername(std.studentId);
+    setPassword(std.studentId);
+    setErrorMsg('');
+  };
+
+  const selectDemoAdvisor = (groupCode: string) => {
+    setUsername(groupCode);
+    setPassword('0001');
+    setErrorMsg('');
+  };
+
+  const selectDemoAdmin = () => {
+    setUsername('admin');
+    setPassword('4321');
+    setErrorMsg('');
+  };
+
+  return (
+    <div className="min-h-[calc(100vh-80px)] py-8 px-4 sm:px-6 lg:px-8 flex flex-col justify-center max-w-5xl mx-auto">
+      {/* Header Title Section */}
+      <div className="text-center mb-8">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100/80 text-blue-800 text-xs font-semibold mb-3 border border-blue-200">
+          <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+          <span>ระบบสารสนเทศติดตามผู้สำเร็จการศึกษา อาชีวศึกษา</span>
+        </div>
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          {systemTitle}
+        </h2>
+        <p className="mt-2 text-base text-slate-600 font-medium max-w-2xl mx-auto">
+          {collegeName} ประจำปีการศึกษา {academicYear}
+        </p>
+      </div>
+
+      {/* Main Login Card */}
+      <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/70 border border-slate-200 overflow-hidden">
+        {/* Role Selector Tabs */}
+        <div className="grid grid-cols-3 border-b border-slate-200 bg-slate-50/80 p-1.5 sm:p-2 gap-1.5 sm:gap-2">
+          {/* Student Tab */}
+          <button
+            id="tab-role-student"
+            type="button"
+            onClick={() => {
+              setActiveTab('student');
+              setUsername('');
+              setPassword('');
+              setErrorMsg('');
+            }}
+            className={`flex items-center justify-center gap-2 py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              activeTab === 'student'
+                ? 'bg-white text-blue-700 shadow-sm border border-slate-200 ring-2 ring-blue-500/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <GraduationCap className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
+            <span>นักศึกษา / ศิษย์เก่า</span>
+          </button>
+
+          {/* Advisor Tab */}
+          <button
+            id="tab-role-advisor"
+            type="button"
+            onClick={() => {
+              setActiveTab('advisor');
+              setUsername('ส.2ชฟ.1');
+              setPassword('0001');
+              setErrorMsg('');
+            }}
+            className={`flex items-center justify-center gap-2 py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              activeTab === 'advisor'
+                ? 'bg-white text-amber-800 shadow-sm border border-slate-200 ring-2 ring-amber-500/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <UserCheck className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600" />
+            <span>ครูที่ปรึกษา</span>
+          </button>
+
+          {/* Admin Tab */}
+          <button
+            id="tab-role-admin"
+            type="button"
+            onClick={() => {
+              setActiveTab('admin');
+              setUsername('admin');
+              setPassword('4321');
+              setErrorMsg('');
+            }}
+            className={`flex items-center justify-center gap-2 py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
+              activeTab === 'admin'
+                ? 'bg-white text-purple-800 shadow-sm border border-slate-200 ring-2 ring-purple-500/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-purple-600" />
+            <span>ผู้ดูแลระบบ (Admin)</span>
+          </button>
+        </div>
+
+        {/* Content Body */}
+        <div className="p-6 sm:p-10">
+          <div className="max-w-lg mx-auto">
+            {/* Role Header Instructions */}
+            <div className="mb-6 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+              {activeTab === 'student' && (
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-blue-100 text-blue-700 mt-0.5">
+                    <GraduationCap className="w-5 h-5" />
+                  </div>
+                  <div className="text-xs sm:text-sm text-slate-700">
+                    <strong className="block font-bold text-slate-900 text-sm mb-1">
+                      เข้าสู่ระบบสำหรับนักศึกษา / ผู้สำเร็จการศึกษา
+                    </strong>
+                    เข้าสู่ระบบด้วย <span className="text-blue-700 font-bold underline">Username และ Password</span> เป็น{' '}
+                    <strong>รหัสนักศึกษา 11 หลัก</strong> ของตนเอง (เช่น 65201010001)
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'advisor' && (
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-amber-100 text-amber-800 mt-0.5">
+                    <UserCheck className="w-5 h-5" />
+                  </div>
+                  <div className="text-xs sm:text-sm text-slate-700">
+                    <strong className="block font-bold text-slate-900 text-sm mb-1">
+                      เข้าสู่ระบบสำหรับครูที่ปรึกษา
+                    </strong>
+                    Username เป็น <strong>กลุ่มเรียน/แผนกวิชา</strong> (เช่น ส.2ชฟ.1, ช.3ชย.1, ส.2บค.1, ส.2ทธ.1) และ
+                    Password คือ <strong className="text-amber-700 font-bold font-mono">0001</strong>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'admin' && (
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-purple-100 text-purple-800 mt-0.5">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div className="text-xs sm:text-sm text-slate-700">
+                    <strong className="block font-bold text-slate-900 text-sm mb-1">
+                      เข้าสู่ระบบสำหรับผู้ดูแลระบบ (Admin)
+                    </strong>
+                    Username: <strong className="text-purple-700 font-mono">admin</strong> และ Password:{' '}
+                    <strong className="text-purple-700 font-mono">4321</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Error Message */}
+            {errorMsg && (
+              <div className="mb-5 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {/* Form */}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-slate-800 mb-1.5">
+                  {activeTab === 'student'
+                    ? 'รหัสนักศึกษา (Username 11 หลัก)'
+                    : activeTab === 'advisor'
+                    ? 'รหัสกลุ่มเรียน / แผนกวิชา (Username)'
+                    : 'ชื่อผู้ใช้งาน (Username)'}
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="input-login-username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={
+                      activeTab === 'student'
+                        ? 'เช่น 65201010001'
+                        : activeTab === 'advisor'
+                        ? 'เช่น ส.2ชฟ.1, ช.3ชย.1, ส.2บค.1'
+                        : 'admin'
+                    }
+                    className="w-full pl-10 pr-4 py-2.5 sm:py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-medium text-slate-900 transition-all bg-white"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-slate-800 mb-1.5">
+                  {activeTab === 'student'
+                    ? 'รหัสผ่าน (Password คือ รหัสนักศึกษา 11 หลัก)'
+                    : 'รหัสผ่าน (Password)'}
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="input-login-password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={
+                      activeTab === 'student'
+                        ? 'กรอกรหัสนักศึกษา 11 หลักอีกครั้ง'
+                        : activeTab === 'advisor'
+                        ? '0001'
+                        : '4321'
+                    }
+                    className="w-full pl-10 pr-4 py-2.5 sm:py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-medium text-slate-900 transition-all bg-white"
+                    required
+                  />
+                </div>
+              </div>
+
+              <button
+                id="btn-submit-login"
+                type="submit"
+                disabled={loading}
+                className="w-full mt-2 py-3.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold text-sm sm:text-base shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>{loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </form>
+
+            {/* Quick Demo Test Buttons */}
+            <div className="mt-8 pt-6 border-t border-slate-200">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
+                <span>บัญชีทดสอบตัวอย่าง (คลิกเพื่อเข้าสู่ระบบทันที):</span>
+              </div>
+
+              {activeTab === 'student' && (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-600">เลือกนักศึกษาเพื่อทดสอบการใช้งาน:</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const std = students.find(s => !s.isUpdated) || students[2];
+                        selectDemoStudent(std);
+                      }}
+                      className="p-2.5 rounded-xl border border-amber-200 bg-amber-50/70 hover:bg-amber-100/70 text-left transition-all group"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-amber-900">⏳ ยังไม่อัปเดตข้อมูล</span>
+                        <span className="text-[10px] bg-amber-200/70 text-amber-800 px-1.5 py-0.5 rounded font-mono">65201010003</span>
+                      </div>
+                      <div className="text-xs text-slate-700 font-medium mt-1 truncate">
+                        นายธนากร ภักดีชน (ช.3ชย.1)
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const std = students.find(s => s.isUpdated) || students[0];
+                        selectDemoStudent(std);
+                      }}
+                      className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 text-left transition-all group"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-emerald-900">✅ อัปเดตแล้ว (มีงานทำ)</span>
+                        <span className="text-[10px] bg-emerald-200/70 text-emerald-800 px-1.5 py-0.5 rounded font-mono">65201010001</span>
+                      </div>
+                      <div className="text-xs text-slate-700 font-medium mt-1 truncate">
+                        นายกิตติศักดิ์ มั่นคง (ช.3ชย.1)
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'advisor' && (
+                <div className="space-y-2">
+                  <p className="text-xs text-slate-600">เลือกกลุ่มเรียนตัวอย่างเพื่อทดสอบ (รหัสผ่าน 0001):</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {['ส.2ชฟ.1', 'ช.3ชย.1', 'ส.2บค.1', 'ส.2ทธ.1'].map((grp) => (
+                      <button
+                        key={grp}
+                        type="button"
+                        onClick={() => selectDemoAdvisor(grp)}
+                        className="p-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 text-center transition-all text-xs font-semibold text-slate-800"
+                      >
+                        <div className="font-bold text-amber-800">{grp}</div>
+                        <div className="text-[10px] text-slate-500">รหัส 0001</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'admin' && (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={selectDemoAdmin}
+                    className="w-full p-2.5 rounded-xl border border-purple-200 bg-purple-50/70 hover:bg-purple-100/70 text-left transition-all flex items-center justify-between"
+                  >
+                    <div>
+                      <span className="font-bold text-purple-900 text-xs">🛡️ บัญชีผู้ดูแลระบบ (Admin)</span>
+                      <div className="text-xs text-slate-600 mt-0.5">เข้าดูรายงานภาพรวมทั้งวิทยาลัย สถิติ และเชื่อมต่อ Google Sheets</div>
+                    </div>
+                    <span className="text-xs font-mono font-bold bg-purple-200 text-purple-900 px-2 py-1 rounded-md">
+                      admin / 4321
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
