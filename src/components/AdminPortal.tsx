@@ -7,11 +7,14 @@ import {
   StudySystem, 
   CurrentStatus, 
   JobMatch,
-  FurtherStudyLevel
+  FurtherStudyLevel,
+  AdvisorAccount
 } from '../types';
-import { exportStudentsToCsv } from '../services/storage';
+import { exportStudentsToCsv, forceServerSync } from '../services/storage';
+import { exportStudentsToExcel, downloadStudentExcelTemplate } from '../services/excelService';
 import { VOCATIONAL_DEPARTMENTS, THAI_PROVINCES, UNEMPLOYED_REASONS } from '../data/constants';
 import { ConfirmationSlip } from './ConfirmationSlip';
+import { ImportStudentsModal } from './ImportStudentsModal';
 import { 
   ShieldCheck, 
   Users, 
@@ -25,6 +28,7 @@ import {
   Search, 
   Filter, 
   Download, 
+  Upload,
   Edit3, 
   Trash2, 
   RotateCcw, 
@@ -38,27 +42,44 @@ import {
   BarChart3, 
   PieChart as PieIcon,
   HelpCircle,
-  Sparkles
+  Sparkles,
+  UserCheck,
+  Phone,
+  Mail,
+  UserPlus,
+  Radio,
+  RefreshCw,
+  Check
 } from 'lucide-react';
 
 interface AdminPortalProps {
   students: StudentRecord[];
+  advisors?: AdvisorAccount[];
   config: SystemConfig;
   onSaveStudent: (student: StudentRecord) => void;
+  onBatchImportStudents?: (imported: StudentRecord[], mode: 'merge' | 'replace') => void;
   onDeleteStudent: (id: string) => void;
   onResetStudent: (id: string) => void;
+  onSaveAdvisor?: (advisor: AdvisorAccount) => void;
+  onDeleteAdvisor?: (idOrUsername: string) => void;
   onOpenGoogleSheetSettings: () => void;
+  onRefreshServer?: () => number;
 }
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({
   students,
+  advisors = [],
   config,
   onSaveStudent,
+  onBatchImportStudents,
   onDeleteStudent,
   onResetStudent,
+  onSaveAdvisor,
+  onDeleteAdvisor,
   onOpenGoogleSheetSettings,
+  onRefreshServer,
 }) => {
-  // Filtering states
+  // Filtering states for students
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterDept, setFilterDept] = useState<string>('all');
@@ -66,8 +87,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [filterSystem, setFilterSystem] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
-  // Active view tab in admin: overview dashboard vs student database
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'students'>('dashboard');
+  // Filtering states for advisors
+  const [advisorSearchQuery, setAdvisorSearchQuery] = useState('');
+  const [advisorFilterCat, setAdvisorFilterCat] = useState<string>('all');
+  const [advisorFilterDept, setAdvisorFilterDept] = useState<string>('all');
+
+  // Active view tab in admin: overview dashboard vs student database vs advisor management
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'students' | 'advisors'>('dashboard');
 
   // Modals
   const [studentModalMode, setStudentModalMode] = useState<'add' | 'edit' | null>(null);
@@ -75,8 +101,41 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [viewingSlipStudent, setViewingSlipStudent] = useState<StudentRecord | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // Success Modal for Added / Saved Student
+  const [savedStudentSuccessModal, setSavedStudentSuccessModal] = useState<{ mode: 'add' | 'edit'; student: StudentRecord } | null>(null);
+
+  // Server Refresh State
+  const [isRefreshingServer, setIsRefreshingServer] = useState(false);
+  const [serverRefreshToast, setServerRefreshToast] = useState<string | null>(null);
+
+  // Advisor Modals
+  const [advisorModalMode, setAdvisorModalMode] = useState<'add' | 'edit' | null>(null);
+  const [currentEditAdvisor, setCurrentEditAdvisor] = useState<AdvisorAccount | null>(null);
+  const [deleteAdvisorConfirmId, setDeleteAdvisorConfirmId] = useState<string | null>(null);
+
+  // Import Modal State
+  const [showImportModal, setShowImportModal] = useState(false);
+
   // Pie chart hover state
   const [hoveredPie, setHoveredPie] = useState<string | null>(null);
+
+  // Manual Server Refresh Handler
+  const handleManualRefreshServer = () => {
+    setIsRefreshingServer(true);
+    setServerRefreshToast(null);
+    
+    // Force sync and reload all students
+    const syncResult = forceServerSync();
+    const count = onRefreshServer ? onRefreshServer() : syncResult.students.length;
+    
+    setTimeout(() => {
+      setIsRefreshingServer(false);
+      setServerRefreshToast(`⚡ ซิงค์เซิร์ฟเวอร์สำเร็จ! อัปเดตข้อมูลรายชื่อนักศึกษาล่าสุดทั้งหมด ${count} รายการเรียบร้อยแล้ว`);
+      setTimeout(() => {
+        setServerRefreshToast(null);
+      }, 4500);
+    }, 450);
+  };
 
   // Overall Statistics Calculations
   const stats = useMemo(() => {
@@ -214,6 +273,60 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     setStudentModalMode('edit');
   };
 
+  // Open Add Advisor Modal
+  const handleOpenAddAdvisorModal = () => {
+    setCurrentEditAdvisor({
+      id: `adv-${Date.now()}`,
+      username: '',
+      name: '',
+      department: 'ช่างยนต์',
+      studyGroup: '',
+      category: 'อุตสาหกรรม',
+      phone: '',
+      email: '',
+    });
+    setAdvisorModalMode('add');
+  };
+
+  // Open Edit Advisor Modal
+  const handleOpenEditAdvisorModal = (adv: AdvisorAccount) => {
+    setCurrentEditAdvisor({ ...adv });
+    setAdvisorModalMode('edit');
+  };
+
+  // Filtered Advisors
+  const filteredAdvisors = useMemo(() => {
+    return advisors.filter(adv => {
+      const q = advisorSearchQuery.trim().toLowerCase();
+      const matchQuery = !q ||
+        adv.name.toLowerCase().includes(q) ||
+        adv.username.toLowerCase().includes(q) ||
+        (adv.studyGroup && adv.studyGroup.toLowerCase().includes(q)) ||
+        (adv.department && adv.department.toLowerCase().includes(q)) ||
+        (adv.phone && adv.phone.includes(q)) ||
+        (adv.email && adv.email.toLowerCase().includes(q));
+
+      const matchCat = advisorFilterCat === 'all' || adv.category === advisorFilterCat;
+      const matchDept = advisorFilterDept === 'all' || adv.department === advisorFilterDept;
+
+      return matchQuery && matchCat && matchDept;
+    });
+  }, [advisors, advisorSearchQuery, advisorFilterCat, advisorFilterDept]);
+
+  // Advisor group statistics map
+  const advisorStatsMap = useMemo(() => {
+    const map = new Map<string, { total: number; updated: number; rate: number }>();
+    advisors.forEach(adv => {
+      const grp = (adv.studyGroup || adv.username).toLowerCase();
+      const groupStudents = students.filter(s => s.studyGroup.toLowerCase() === grp);
+      const total = groupStudents.length;
+      const updated = groupStudents.filter(s => s.isUpdated).length;
+      const rate = total > 0 ? Math.round((updated / total) * 100) : 0;
+      map.set(adv.id || adv.username, { total, updated, rate });
+    });
+    return map;
+  }, [advisors, students]);
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Top Banner / Actions */}
@@ -225,54 +338,127 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-xl sm:text-2xl font-bold text-slate-900">
-                ศูนย์บริหารจัดการข้อมูลภาวะการมีงานทำ ({config.collegeName})
+                ระบบติดตามภาวะการมีงานทำและการศึกษาต่อ
               </h2>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-200">
                 ผู้ดูแลระบบ (Admin Portal)
               </span>
             </div>
-            <p className="text-sm text-slate-600 mt-0.5">
-              ติดตามสถิติผู้สำเร็จการศึกษาประจำปีการศึกษา {config.academicYear} • เชื่อมต่อ Google Sheet แบบเรียลไทม์
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                <span>Real-time Live Sync</span>
+              </span>
+              <span className="text-xs text-slate-500">
+                {config.collegeName} • ปีการศึกษา {config.academicYear}
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Global Toolbar Actions */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
-            id="btn-admin-google-sheet"
-            onClick={onOpenGoogleSheetSettings}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+            id="btn-admin-refresh-server"
+            onClick={handleManualRefreshServer}
+            disabled={isRefreshingServer}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm shadow-emerald-500/20 transition-all cursor-pointer border border-emerald-500"
+            title="รีเฟรชและดึงข้อมูลรายชื่อนักเรียนจากเซิร์ฟเวอร์ใหม่ทั้งหมด (หากเกิดบัครายชื่อไม่ขึ้นให้กดปุ่มนี้)"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>จัดการระบบ & Google Sheet</span>
+            <RefreshCw className={`w-4 h-4 ${isRefreshingServer ? 'animate-spin' : ''}`} />
+            <span>{isRefreshingServer ? 'กำลังอัปเดตเซิร์ฟเวอร์...' : 'รีเฟรชข้อมูลเซิร์ฟเวอร์'}</span>
           </button>
 
           <button
-            id="btn-admin-export-csv"
-            onClick={() => exportStudentsToCsv(students, `รายงานภาวะการมีงานทำ_${config.collegeName}_ปี${config.academicYear}.csv`)}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs sm:text-sm font-bold border border-slate-200 transition-colors cursor-pointer"
+            id="btn-admin-import-excel"
+            onClick={() => setShowImportModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm shadow-purple-500/20 transition-all cursor-pointer ring-2 ring-purple-300/50"
+          >
+            <Upload className="w-4 h-4" />
+            <span>นำเข้าข้อมูล Excel</span>
+          </button>
+
+          <button
+            id="btn-admin-download-template"
+            onClick={() => downloadStudentExcelTemplate()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs sm:text-sm font-bold transition-colors cursor-pointer"
+            title="ดาวน์โหลดไฟล์แบบฟอร์มเปล่าสำหรับนำไปกรอกข้อมูลนักศึกษา"
+          >
+            <Download className="w-4 h-4 text-amber-600" />
+            <span>ไฟล์ตัวอย่าง (.xlsx)</span>
+          </button>
+
+          <button
+            id="btn-admin-settings"
+            onClick={onOpenGoogleSheetSettings}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+          >
+            <Radio className="w-4 h-4" />
+            <span>ตั้งค่าระบบ & Real-time</span>
+          </button>
+
+          <button
+            id="btn-admin-export-excel"
+            onClick={() => exportStudentsToExcel(students, `รายงานภาวะการมีงานทำ_${config.collegeName}_ปี${config.academicYear}.xlsx`)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs sm:text-sm font-bold border border-slate-200 transition-colors cursor-pointer"
           >
             <Download className="w-4 h-4" />
-            <span>ส่งออก Excel / CSV</span>
+            <span>ส่งออก Excel</span>
+          </button>
+
+          <button
+            id="btn-admin-add-advisor"
+            onClick={handleOpenAddAdvisorModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>+ ครูที่ปรึกษา</span>
           </button>
 
           <button
             id="btn-admin-add-student"
             onClick={handleOpenAddModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-sm transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>เพิ่มนักศึกษาใหม่</span>
+            <span>+ นักศึกษา</span>
           </button>
         </div>
       </div>
 
-      {/* Main Tabs (Dashboard Overview vs Student Database) */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+      {/* Realtime Server Refresh Success Alert Banner */}
+      {serverRefreshToast && (
+        <div className="bg-emerald-50 border-2 border-emerald-400 p-4 rounded-2xl flex items-center justify-between gap-3 text-emerald-950 animate-fadeIn shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-sm font-extrabold text-emerald-900 flex items-center gap-2">
+                <span>อัปเดตข้อมูลเซิร์ฟเวอร์สำเร็จ (Real-time Synced)</span>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/80 text-emerald-800">
+                  Live All Nodes
+                </span>
+              </div>
+              <div className="text-xs text-emerald-700 mt-0.5">
+                {serverRefreshToast}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setServerRefreshToast(null)}
+            className="p-1.5 text-emerald-700 hover:text-emerald-950 rounded-lg hover:bg-emerald-100 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Main Tabs (Dashboard Overview vs Student Database vs Advisor Management) */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
         <button
           onClick={() => setActiveTab('dashboard')}
-          className={`flex items-center gap-2 px-5 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+          className={`flex items-center gap-2 px-5 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
             activeTab === 'dashboard'
               ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
               : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
@@ -284,7 +470,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
         <button
           onClick={() => setActiveTab('students')}
-          className={`flex items-center gap-2 px-5 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+          className={`flex items-center gap-2 px-5 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
             activeTab === 'students'
               ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
               : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
@@ -292,6 +478,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         >
           <Users className="w-4 h-4" />
           <span>จัดการฐานข้อมูลนักเรียน ({students.length} คน)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('advisors')}
+          className={`flex items-center gap-2 px-5 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 ${
+            activeTab === 'advisors'
+              ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+              : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+          }`}
+        >
+          <UserCheck className="w-4 h-4" />
+          <span>จัดการข้อมูลครูที่ปรึกษา ({advisors.length} ท่าน)</span>
         </button>
       </div>
 
@@ -562,23 +760,320 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </div>
       )}
 
+      {/* TAB 3: ADVISOR MANAGEMENT */}
+      {activeTab === 'advisors' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Advisor Stats Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xl">
+                👨‍🏫
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-500">ครูที่ปรึกษาทั้งหมด</div>
+                <div className="text-2xl font-black text-slate-900">{advisors.length} ท่าน</div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xl">
+                🏢
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-500">แผนกวิชาที่ดูแล</div>
+                <div className="text-2xl font-black text-slate-900">
+                  {new Set(advisors.map(a => a.department)).size} แผนก
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-xl">
+                👥
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-500">นักศึกษาในความดูแล</div>
+                <div className="text-2xl font-black text-slate-900">{students.length} คน</div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xl">
+                📈
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-500">อัตราตอบแบบสำรวจรวม</div>
+                <div className="text-2xl font-black text-emerald-600">
+                  {stats.responseRate}%
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Advisors Toolbar */}
+          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+              {/* Search */}
+              <div className="relative w-full md:w-80">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="ค้นหาชื่อครู, กลุ่มเรียน, แผนก, เบอร์..."
+                  value={advisorSearchQuery}
+                  onChange={(e) => setAdvisorSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-hidden focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-slate-50"
+                />
+              </div>
+
+              {/* Filters & Add Action */}
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
+                <select
+                  value={advisorFilterCat}
+                  onChange={(e) => {
+                    setAdvisorFilterCat(e.target.value);
+                    setAdvisorFilterDept('all');
+                  }}
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium bg-white"
+                >
+                  <option value="all">ทุกประเภทวิชา</option>
+                  <option value="อุตสาหกรรม">อุตสาหกรรม</option>
+                  <option value="บริหารธุรกิจ">บริหารธุรกิจ</option>
+                  <option value="คหกรรม">คหกรรม</option>
+                  <option value="เทคโนโลยีธุรกิจดิจิทัล">เทคโนโลยีธุรกิจดิจิทัล</option>
+                </select>
+
+                <select
+                  value={advisorFilterDept}
+                  onChange={(e) => setAdvisorFilterDept(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium bg-white"
+                >
+                  <option value="all">ทุกแผนกวิชา</option>
+                  {(advisorFilterCat === 'all' 
+                    ? Object.values(VOCATIONAL_DEPARTMENTS).flat()
+                    : VOCATIONAL_DEPARTMENTS[advisorFilterCat as VocationalCategory] || []
+                  ).map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+
+                <button
+                  onClick={handleOpenAddAdvisorModal}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-xs transition-all cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>เพิ่มครูที่ปรึกษาใหม่</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Advisors Table */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-purple-600" />
+                <span className="font-bold text-slate-900 text-sm sm:text-base">
+                  รายชื่อครูที่ปรึกษาประจำกลุ่มเรียน
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700">
+                  {filteredAdvisors.length} ท่าน
+                </span>
+              </div>
+              <span className="text-xs text-slate-500">
+                รหัสผ่านเริ่มต้นสำหรับครูที่ปรึกษาคือ <strong className="font-mono text-purple-700 font-bold">0001</strong>
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 text-xs font-semibold uppercase tracking-wider">
+                    <th className="py-3.5 px-4">กลุ่มเรียน (Username)</th>
+                    <th className="py-3.5 px-4">ชื่อ - สกุล ครูที่ปรึกษา</th>
+                    <th className="py-3.5 px-4">แผนกวิชา / ประเภท</th>
+                    <th className="py-3.5 px-4">ช่องทางติดต่อ</th>
+                    <th className="py-3.5 px-4">ความคืบหน้านักเรียน</th>
+                    <th className="py-3.5 px-4 text-right">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
+                  {filteredAdvisors.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-slate-400">
+                        <UserCheck className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                        ไม่พบข้อมูลครูที่ปรึกษาที่ตรงกับเงื่อนไขการค้นหา
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredAdvisors.map((adv) => {
+                      const groupStat = advisorStatsMap.get(adv.id || adv.username) || { total: 0, updated: 0, rate: 0 };
+                      return (
+                        <tr key={adv.id || adv.username} className="hover:bg-purple-50/30 transition-colors">
+                          {/* Username / Group */}
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-xs px-2.5 py-1 rounded-lg bg-purple-100 text-purple-800 border border-purple-200">
+                                {adv.studyGroup || adv.username}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Name */}
+                          <td className="py-3.5 px-4 font-bold text-slate-900">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0">
+                                {adv.name.charAt(0) || 'อ'}
+                              </div>
+                              <span>{adv.name}</span>
+                            </div>
+                          </td>
+
+                          {/* Dept & Category */}
+                          <td className="py-3.5 px-4">
+                            <div className="font-semibold text-slate-800">{adv.department}</div>
+                            <div className="text-xs text-slate-400">{adv.category}</div>
+                          </td>
+
+                          {/* Contact Info */}
+                          <td className="py-3.5 px-4">
+                            <div className="space-y-0.5 text-xs text-slate-600">
+                              {adv.phone && (
+                                <div className="flex items-center gap-1.5">
+                                  <Phone className="w-3.5 h-3.5 text-slate-400" />
+                                  <a href={`tel:${adv.phone}`} className="hover:text-purple-600 hover:underline">
+                                    {adv.phone}
+                                  </a>
+                                </div>
+                              )}
+                              {adv.email && (
+                                <div className="flex items-center gap-1.5">
+                                  <Mail className="w-3.5 h-3.5 text-slate-400" />
+                                  <a href={`mailto:${adv.email}`} className="hover:text-purple-600 hover:underline">
+                                    {adv.email}
+                                  </a>
+                                </div>
+                              )}
+                              {!adv.phone && !adv.email && <span className="text-slate-400">-</span>}
+                            </div>
+                          </td>
+
+                          {/* Progress in Group */}
+                          <td className="py-3.5 px-4 min-w-[160px]">
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-xs font-semibold">
+                                <span className="text-slate-600">
+                                  {groupStat.updated} / {groupStat.total} คน
+                                </span>
+                                <span className="text-purple-700 font-bold">{groupStat.rate}%</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div
+                                  className="bg-gradient-to-r from-purple-500 to-indigo-600 h-full rounded-full transition-all duration-500"
+                                  style={{ width: `${groupStat.rate}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => handleOpenEditAdvisorModal(adv)}
+                                className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                title="แก้ไขข้อมูลครูที่ปรึกษา"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => setDeleteAdvisorConfirmId(adv.id || adv.username)}
+                                className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                title="ลบข้อมูลครูที่ปรึกษา"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TAB 2: STUDENT DATABASE TABLE & MANAGEMENT */}
       {activeTab === 'students' && (
         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden animate-fadeIn">
           {/* Table Header & Multi-Filters */}
           <div className="p-6 border-b border-slate-200 space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
-                <h3 className="text-base sm:text-lg font-bold text-slate-900">
-                  ฐานข้อมูลนักเรียนทั้งหมด ({filteredStudents.length}/{students.length} คน)
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <span>ฐานข้อมูลนักเรียนทั้งหมด ({filteredStudents.length}/{students.length} คน)</span>
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-800 font-bold">
+                    อัปเดตแล้ว {students.filter(s => s.isUpdated).length} คน ({students.length > 0 ? Math.round((students.filter(s => s.isUpdated).length / students.length) * 100) : 0}%)
+                  </span>
                 </h3>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-slate-500 mt-0.5">
                   แสดงเครื่องหมาย ✅ สำหรับนักเรียนที่อัปเดตข้อมูลแล้ว และ ⏳ สำหรับผู้ที่ยังไม่ได้อัปเดต
                 </p>
               </div>
 
-              {/* Search */}
-              <div className="relative min-w-[260px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  id="btn-admin-table-refresh-server"
+                  onClick={handleManualRefreshServer}
+                  disabled={isRefreshingServer}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer border border-emerald-500"
+                  title="หากเกิดปัญหา/รายชื่อนักศึกษาไม่ขึ้น ให้กดปุ่มนี้เพื่อดึงข้อมูลจากเซิร์ฟเวอร์ใหม่ทันที"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingServer ? 'animate-spin' : ''}`} />
+                  <span>{isRefreshingServer ? 'กำลังรีเฟรช...' : 'รีเฟรชข้อมูลเซิร์ฟเวอร์'}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowImportModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>นำเข้า Excel (.xlsx/.csv)</span>
+                </button>
+
+                <button
+                  onClick={() => downloadStudentExcelTemplate()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  title="ดาวน์โหลดไฟล์ตัวอย่าง Excel สำหรับกรอกข้อมูล"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-600" />
+                  <span>โหลดตัวอย่าง (.xlsx)</span>
+                </button>
+
+                <button
+                  onClick={() => exportStudentsToExcel(students, `รายชื่อนักศึกษา_${config.collegeName}.xlsx`)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold border border-slate-200 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>ส่งออก Excel</span>
+                </button>
+
+                <button
+                  onClick={handleOpenAddModal}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ เพิ่มนักศึกษา</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Search Bar & Multi-Filters */}
+            <div className="flex flex-col md:flex-row gap-3 pt-2">
+              <div className="relative flex-1">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <Search className="w-4 h-4" />
                 </div>
@@ -586,7 +1081,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="ค้นหาชื่อ, รหัสนักศึกษา, กลุ่มเรียน..."
+                  placeholder="ค้นหาชื่อ, รหัสนักศึกษา, กลุ่มเรียน, แผนกวิชา..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
               </div>
@@ -841,8 +1336,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                const mode = studentModalMode;
+                const savedStudent = { ...currentEditStudent };
                 onSaveStudent(currentEditStudent);
                 setStudentModalMode(null);
+                setSavedStudentSuccessModal({
+                  mode: mode === 'add' ? 'add' : 'edit',
+                  student: savedStudent,
+                });
               }}
               className="p-6 space-y-4 text-xs sm:text-sm max-h-[75vh] overflow-y-auto"
             >
@@ -1094,6 +1595,189 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </div>
       )}
 
+      {/* MODAL: ADD / EDIT ADVISOR */}
+      {advisorModalMode && currentEditAdvisor && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-xl w-full my-6 overflow-hidden animate-scaleIn">
+            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <UserCheck className="w-5 h-5 text-purple-400" />
+                <span>
+                  {advisorModalMode === 'add' ? 'เพิ่มข้อมูลครูที่ปรึกษาใหม่' : `แก้ไขข้อมูลครูที่ปรึกษา (${currentEditAdvisor.studyGroup || currentEditAdvisor.username})`}
+                </span>
+              </div>
+              <button
+                onClick={() => setAdvisorModalMode(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (onSaveAdvisor) {
+                  onSaveAdvisor({
+                    ...currentEditAdvisor,
+                    studyGroup: currentEditAdvisor.studyGroup || currentEditAdvisor.username,
+                  });
+                }
+                setAdvisorModalMode(null);
+              }}
+              className="p-6 space-y-4 text-xs sm:text-sm max-h-[80vh] overflow-y-auto"
+            >
+              {/* Alert notice about advisor credentials */}
+              <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-200 text-purple-900 text-xs flex items-start gap-2.5">
+                <div className="text-base shrink-0">💡</div>
+                <div>
+                  <strong>ข้อมูลการเข้าสู่ระบบ:</strong> ครูที่ปรึกษาจะใช้ <strong>Username (รหัสกลุ่มเรียน)</strong> เช่น <code className="bg-purple-100 px-1 py-0.5 rounded font-mono font-bold">ส.2ชฟ.1</code> และรหัสผ่านเริ่มต้น <code className="bg-purple-100 px-1 py-0.5 rounded font-mono font-bold">0001</code> ในการเข้าสู่ระบบ
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">รหัสกลุ่มเรียน (Username) *</label>
+                  <input
+                    type="text"
+                    value={currentEditAdvisor.username}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCurrentEditAdvisor({ ...currentEditAdvisor, username: val, studyGroup: val });
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-mono focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                    placeholder="เช่น ส.2ชฟ.1, ช.3ชย.1"
+                    required
+                  />
+                  <span className="text-[11px] text-slate-500 mt-1 block">ตัวอย่าง: ช.3ชย.1, ส.2บค.1</span>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">ชื่อ - นามสกุล ครูที่ปรึกษา *</label>
+                  <input
+                    type="text"
+                    value={currentEditAdvisor.name}
+                    onChange={(e) => setCurrentEditAdvisor({ ...currentEditAdvisor, name: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                    placeholder="อ.สมคิด วิศวกรรม"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">ประเภทวิชา *</label>
+                  <select
+                    value={currentEditAdvisor.category}
+                    onChange={(e) => {
+                      const cat = e.target.value as VocationalCategory;
+                      const depts = VOCATIONAL_DEPARTMENTS[cat] || [];
+                      setCurrentEditAdvisor({
+                        ...currentEditAdvisor,
+                        category: cat,
+                        department: depts[0] || '',
+                      });
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  >
+                    <option value="อุตสาหกรรม">อุตสาหกรรม</option>
+                    <option value="บริหารธุรกิจ">บริหารธุรกิจ</option>
+                    <option value="คหกรรม">คหกรรม</option>
+                    <option value="เทคโนโลยีธุรกิจดิจิทัล">เทคโนโลยีธุรกิจดิจิทัล</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">สาขาวิชา / แผนกวิชา *</label>
+                  <select
+                    value={currentEditAdvisor.department}
+                    onChange={(e) => setCurrentEditAdvisor({ ...currentEditAdvisor, department: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                  >
+                    {(VOCATIONAL_DEPARTMENTS[currentEditAdvisor.category] || []).map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">เบอร์โทรศัพท์ติดต่อ</label>
+                  <input
+                    type="tel"
+                    value={currentEditAdvisor.phone || ''}
+                    onChange={(e) => setCurrentEditAdvisor({ ...currentEditAdvisor, phone: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                    placeholder="081-234-5678"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">อีเมลติดต่อ</label>
+                  <input
+                    type="email"
+                    value={currentEditAdvisor.email || ''}
+                    onChange={(e) => setCurrentEditAdvisor({ ...currentEditAdvisor, email: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-purple-500 focus:outline-hidden"
+                    placeholder="teacher@attc.ac.th"
+                  />
+                </div>
+              </div>
+
+              {/* Submit Buttons */}
+              <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdvisorModalMode(null)}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-xs cursor-pointer"
+                >
+                  บันทึกข้อมูลครูที่ปรึกษา
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Advisor Confirmation Modal */}
+      {deleteAdvisorConfirmId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+            <h3 className="text-base font-bold text-slate-900">ยืนยันการลบข้อมูลครูที่ปรึกษา</h3>
+            <p className="text-xs sm:text-sm text-slate-600">
+              ท่านต้องการลบข้อมูลครูที่ปรึกษากลุ่มเรียนนี้ออกจากระบบใช่หรือไม่?
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setDeleteAdvisorConfirmId(null)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => {
+                  if (onDeleteAdvisor) {
+                    onDeleteAdvisor(deleteAdvisorConfirmId);
+                  }
+                  setDeleteAdvisorConfirmId(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+              >
+                ยืนยันการลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* View Slip Modal */}
       {viewingSlipStudent && (
         <ConfirmationSlip
@@ -1101,6 +1785,96 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
           config={config}
           onClose={() => setViewingSlipStudent(null)}
         />
+      )}
+
+      {/* Import Students via Excel / Google Sheets Modal */}
+      {showImportModal && (
+        <ImportStudentsModal
+          existingStudents={students}
+          onImportSuccess={(imported, mode) => {
+            if (onBatchImportStudents) {
+              onBatchImportStudents(imported, mode);
+            }
+          }}
+          onClose={() => setShowImportModal(false)}
+        />
+      )}
+
+      {/* POPUP MODAL: เพิ่มข้อมูลสำเร็จ / บันทึกข้อมูลสำเร็จ พร้อมเครื่องหมายถูกต้อง */}
+      {savedStudentSuccessModal && (
+        <div 
+          id="modal-save-student-success"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-fadeIn"
+        >
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border border-slate-200 text-center space-y-5 transform transition-all">
+            
+            {/* Animated Checkmark Badge */}
+            <div className="relative mx-auto w-20 h-20">
+              <div className="absolute inset-0 rounded-full bg-emerald-400 opacity-25 animate-ping"></div>
+              <div className="relative w-20 h-20 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30">
+                <CheckCircle2 className="w-12 h-12 text-white stroke-[2.5]" />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>อัปเดตเซิร์ฟเวอร์ Real-time เรียบร้อย</span>
+              </span>
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900 pt-1">
+                {savedStudentSuccessModal.mode === 'add' ? 'เพิ่มข้อมูลสำเร็จ' : 'บันทึกข้อมูลสำเร็จ'}
+              </h3>
+              <p className="text-xs text-slate-500">
+                ระบบได้บันทึกข้อมูลและอัปเดตฐานข้อมูลเซิร์ฟเวอร์เรียบร้อยแล้ว
+              </p>
+            </div>
+
+            {/* Student Info Card Summary */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-left space-y-2.5 text-xs">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                <span className="text-slate-500">รหัสนักศึกษา:</span>
+                <span className="font-mono font-bold text-slate-900 text-sm bg-white px-2.5 py-0.5 rounded-lg border border-slate-200">
+                  {savedStudentSuccessModal.student.studentId}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">ชื่อ - นามสกุล:</span>
+                <span className="font-bold text-slate-900">
+                  {savedStudentSuccessModal.student.prefix}{savedStudentSuccessModal.student.fullName}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">สาขาวิชา / แผนก:</span>
+                <span className="font-medium text-slate-800">
+                  {savedStudentSuccessModal.student.department || '-'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">ระดับชั้น / กลุ่มเรียน:</span>
+                <span className="font-medium text-slate-800">
+                  {savedStudentSuccessModal.student.educationLevel} • {savedStudentSuccessModal.student.studyGroup}
+                </span>
+              </div>
+              <div className="flex justify-between items-center pt-1.5 border-t border-slate-200">
+                <span className="text-slate-500">สถานะข้อมูล:</span>
+                <span className={`inline-flex items-center gap-1 font-bold ${
+                  savedStudentSuccessModal.student.isUpdated ? 'text-emerald-600' : 'text-amber-600'
+                }`}>
+                  {savedStudentSuccessModal.student.isUpdated ? '✅ อัปเดตภาวะการมีงานทำแล้ว' : '⏳ รอการตอบแบบสำรวจ'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              id="btn-close-success-modal"
+              onClick={() => setSavedStudentSuccessModal(null)}
+              className="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-98 text-white font-bold text-sm shadow-md shadow-emerald-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <Check className="w-4 h-4" />
+              <span>ตกลง (เข้าใจแล้ว)</span>
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

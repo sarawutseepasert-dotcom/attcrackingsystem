@@ -59,19 +59,20 @@ export interface SystemConfig {
   contactPhone: string;
   contactEmail: string;
   surveyDeadline: string;
-  googleSheetUrl: string;
-  googleSheetId: string;
-  googleWebAppScriptUrl: string;
-  lastSyncedAt: string | null;
-  autoSync: boolean;
+  realtimeSyncEnabled: boolean;
+  lastRealtimeUpdateAt: string | null;
+  autoSync?: boolean;
 }
 
 export interface AdvisorAccount {
-  username: string; // studyGroup
+  id?: string;
+  username: string; // studyGroup code or login username
   name: string;
   department: string;
   studyGroup: string;
   category: VocationalCategory;
+  phone?: string;
+  email?: string;
 }
 
 export interface CurrentUser {

@@ -169,7 +169,7 @@ export const ConfirmationSlip: React.FC<ConfirmationSlipProps> = ({
 
             <div className="text-right">
               <div className="font-mono text-[11px] text-slate-400">DOC-ID: ATTC-{student.studentId}-{Date.now().toString().slice(-6)}</div>
-              <div className="text-[11px] text-slate-400">งานแนะแนวและส่งเสริมการมีงานทำ</div>
+              <div className="text-[11px] text-slate-400">งานครูที่ปรึกษาและการแนะแนว</div>
             </div>
           </div>
         </div>

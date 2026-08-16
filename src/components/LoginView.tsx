@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserRole, StudentRecord, CurrentUser } from '../types';
+import { UserRole, StudentRecord, CurrentUser, AdvisorAccount } from '../types';
 import { STUDY_GROUPS_LIST } from '../data/constants';
 import { 
   GraduationCap, 
@@ -8,7 +8,6 @@ import {
   Lock, 
   User, 
   ArrowRight, 
-  HelpCircle, 
   CheckCircle2, 
   Sparkles,
   School,
@@ -17,6 +16,7 @@ import {
 
 interface LoginViewProps {
   students: StudentRecord[];
+  advisors?: AdvisorAccount[];
   collegeName: string;
   systemTitle: string;
   academicYear: string;
@@ -25,6 +25,7 @@ interface LoginViewProps {
 
 export const LoginView: React.FC<LoginViewProps> = ({
   students,
+  advisors = [],
   collegeName,
   systemTitle,
   academicYear,
@@ -103,7 +104,23 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
 
     if (cleanPass !== '0001') {
-      setErrorMsg('รหัสผ่านครูที่ปรึกษาไม่ถูกต้อง (รหัสผ่านเริ่มต้นคือ: 0001)');
+      setErrorMsg('รหัสผ่านครูที่ปรึกษาไม่ถูกต้อง');
+      return;
+    }
+
+    // Search in dynamic advisors list first
+    const foundAdvisor = advisors.find(a => 
+      a.username.toLowerCase() === cleanGroup.toLowerCase() || 
+      a.studyGroup.toLowerCase() === cleanGroup.toLowerCase()
+    );
+
+    if (foundAdvisor) {
+      onLoginSuccess({
+        role: 'advisor',
+        username: foundAdvisor.studyGroup || foundAdvisor.username,
+        displayName: foundAdvisor.name,
+        advisorData: foundAdvisor,
+      });
       return;
     }
 
@@ -139,7 +156,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         displayName: 'ผู้ดูแลระบบส่วนกลาง (Admin)',
       });
     } else {
-      setErrorMsg('Username หรือ Password ผู้ดูแลระบบไม่ถูกต้อง (admin / 4321)');
+      setErrorMsg('Username หรือ Password ผู้ดูแลระบบไม่ถูกต้อง');
     }
   };
 
@@ -156,25 +173,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
       setLoading(false);
     }, 150);
-  };
-
-  // Quick helper selector for testing
-  const selectDemoStudent = (std: StudentRecord) => {
-    setUsername(std.studentId);
-    setPassword(std.studentId);
-    setErrorMsg('');
-  };
-
-  const selectDemoAdvisor = (groupCode: string) => {
-    setUsername(groupCode);
-    setPassword('0001');
-    setErrorMsg('');
-  };
-
-  const selectDemoAdmin = () => {
-    setUsername('admin');
-    setPassword('4321');
-    setErrorMsg('');
   };
 
   return (
@@ -223,8 +221,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
             type="button"
             onClick={() => {
               setActiveTab('advisor');
-              setUsername('ส.2ชฟ.1');
-              setPassword('0001');
+              setUsername('');
+              setPassword('');
               setErrorMsg('');
             }}
             className={`flex items-center justify-center gap-2 py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
@@ -243,8 +241,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
             type="button"
             onClick={() => {
               setActiveTab('admin');
-              setUsername('admin');
-              setPassword('4321');
+              setUsername('');
+              setPassword('');
               setErrorMsg('');
             }}
             className={`flex items-center justify-center gap-2 py-3 px-3 rounded-2xl text-xs sm:text-sm font-bold transition-all ${
@@ -273,7 +271,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       เข้าสู่ระบบสำหรับนักศึกษา / ผู้สำเร็จการศึกษา
                     </strong>
                     เข้าสู่ระบบด้วย <span className="text-blue-700 font-bold underline">Username และ Password</span> เป็น{' '}
-                    <strong>รหัสนักศึกษา 11 หลัก</strong> ของตนเอง (เช่น 65201010001)
+                    <strong>รหัสนักศึกษา 11 หลัก</strong> ของตนเอง
                   </div>
                 </div>
               )}
@@ -287,8 +285,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <strong className="block font-bold text-slate-900 text-sm mb-1">
                       เข้าสู่ระบบสำหรับครูที่ปรึกษา
                     </strong>
-                    Username เป็น <strong>กลุ่มเรียน/แผนกวิชา</strong> (เช่น ส.2ชฟ.1, ช.3ชย.1, ส.2บค.1, ส.2ทธ.1) และ
-                    Password คือ <strong className="text-amber-700 font-bold font-mono">0001</strong>
+                    กรุณากรอก <strong>กลุ่มเรียน / แผนกวิชา</strong> และรหัสผ่านเพื่อเข้าสู่ระบบ
                   </div>
                 </div>
               )}
@@ -302,8 +299,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <strong className="block font-bold text-slate-900 text-sm mb-1">
                       เข้าสู่ระบบสำหรับผู้ดูแลระบบ (Admin)
                     </strong>
-                    Username: <strong className="text-purple-700 font-mono">admin</strong> และ Password:{' '}
-                    <strong className="text-purple-700 font-mono">4321</strong>
+                    กรุณากรอก Username และ Password ของผู้ดูแลระบบส่วนกลาง
                   </div>
                 </div>
               )}
@@ -338,10 +334,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder={
                       activeTab === 'student'
-                        ? 'เช่น 65201010001'
+                        ? 'กรอกรหัสนักศึกษา 11 หลัก'
                         : activeTab === 'advisor'
-                        ? 'เช่น ส.2ชฟ.1, ช.3ชย.1, ส.2บค.1'
-                        : 'admin'
+                        ? 'กรอกรหัสกลุ่มเรียน / แผนกวิชา'
+                        : 'กรอก Username'
                     }
                     className="w-full pl-10 pr-4 py-2.5 sm:py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-medium text-slate-900 transition-all bg-white"
                     required
@@ -367,9 +363,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     placeholder={
                       activeTab === 'student'
                         ? 'กรอกรหัสนักศึกษา 11 หลักอีกครั้ง'
-                        : activeTab === 'advisor'
-                        ? '0001'
-                        : '4321'
+                        : 'กรอกรหัสผ่าน'
                     }
                     className="w-full pl-10 pr-4 py-2.5 sm:py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-medium text-slate-900 transition-all bg-white"
                     required
@@ -387,92 +381,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
-
-            {/* Quick Demo Test Buttons */}
-            <div className="mt-8 pt-6 border-t border-slate-200">
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
-                <span>บัญชีทดสอบตัวอย่าง (คลิกเพื่อเข้าสู่ระบบทันที):</span>
-              </div>
-
-              {activeTab === 'student' && (
-                <div className="space-y-2">
-                  <p className="text-xs text-slate-600">เลือกนักศึกษาเพื่อทดสอบการใช้งาน:</p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const std = students.find(s => !s.isUpdated) || students[2];
-                        selectDemoStudent(std);
-                      }}
-                      className="p-2.5 rounded-xl border border-amber-200 bg-amber-50/70 hover:bg-amber-100/70 text-left transition-all group"
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-amber-900">⏳ ยังไม่อัปเดตข้อมูล</span>
-                        <span className="text-[10px] bg-amber-200/70 text-amber-800 px-1.5 py-0.5 rounded font-mono">65201010003</span>
-                      </div>
-                      <div className="text-xs text-slate-700 font-medium mt-1 truncate">
-                        นายธนากร ภักดีชน (ช.3ชย.1)
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const std = students.find(s => s.isUpdated) || students[0];
-                        selectDemoStudent(std);
-                      }}
-                      className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 text-left transition-all group"
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-emerald-900">✅ อัปเดตแล้ว (มีงานทำ)</span>
-                        <span className="text-[10px] bg-emerald-200/70 text-emerald-800 px-1.5 py-0.5 rounded font-mono">65201010001</span>
-                      </div>
-                      <div className="text-xs text-slate-700 font-medium mt-1 truncate">
-                        นายกิตติศักดิ์ มั่นคง (ช.3ชย.1)
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'advisor' && (
-                <div className="space-y-2">
-                  <p className="text-xs text-slate-600">เลือกกลุ่มเรียนตัวอย่างเพื่อทดสอบ (รหัสผ่าน 0001):</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {['ส.2ชฟ.1', 'ช.3ชย.1', 'ส.2บค.1', 'ส.2ทธ.1'].map((grp) => (
-                      <button
-                        key={grp}
-                        type="button"
-                        onClick={() => selectDemoAdvisor(grp)}
-                        className="p-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 text-center transition-all text-xs font-semibold text-slate-800"
-                      >
-                        <div className="font-bold text-amber-800">{grp}</div>
-                        <div className="text-[10px] text-slate-500">รหัส 0001</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'admin' && (
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={selectDemoAdmin}
-                    className="w-full p-2.5 rounded-xl border border-purple-200 bg-purple-50/70 hover:bg-purple-100/70 text-left transition-all flex items-center justify-between"
-                  >
-                    <div>
-                      <span className="font-bold text-purple-900 text-xs">🛡️ บัญชีผู้ดูแลระบบ (Admin)</span>
-                      <div className="text-xs text-slate-600 mt-0.5">เข้าดูรายงานภาพรวมทั้งวิทยาลัย สถิติ และเชื่อมต่อ Google Sheets</div>
-                    </div>
-                    <span className="text-xs font-mono font-bold bg-purple-200 text-purple-900 px-2 py-1 rounded-md">
-                      admin / 4321
-                    </span>
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </div>

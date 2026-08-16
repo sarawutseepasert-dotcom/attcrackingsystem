@@ -1,9 +1,291 @@
-import { StudentRecord, SystemConfig } from '../types';
-import { INITIAL_STUDENTS, DEFAULT_CONFIG } from '../data/constants';
+import { StudentRecord, SystemConfig, AdvisorAccount } from '../types';
+import { INITIAL_STUDENTS, DEFAULT_CONFIG, INITIAL_ADVISORS } from '../data/constants';
 
 const STORAGE_KEYS = {
   STUDENTS: 'attc_tracking_students_v1',
   CONFIG: 'attc_tracking_config_v1',
+  ADVISORS: 'attc_tracking_advisors_v1',
+  LAST_UPDATE: 'attc_tracking_last_update_v1',
+  SERVER_SYNC_TIME: 'attc_tracking_server_sync_time_v1',
+};
+
+// Real-time Event Definitions
+export type RealtimeEventType = 
+  | 'students_updated' 
+  | 'advisors_updated' 
+  | 'config_updated' 
+  | 'data_reset' 
+  | 'batch_imported'
+  | 'server_connected';
+
+export interface RealtimeEventPayload {
+  type: RealtimeEventType;
+  timestamp: number;
+  senderId?: string;
+  count?: number;
+  detail?: string;
+}
+
+type RealtimeListener = (payload: RealtimeEventPayload) => void;
+const listeners = new Set<RealtimeListener>();
+
+// Unique Tab/Device instance ID
+export const TAB_INSTANCE_ID = typeof window !== 'undefined' 
+  ? `dev_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`
+  : 'server_inst';
+
+// Local BroadcastChannel for same-device multi-tab communication
+let broadcastChannel: BroadcastChannel | null = null;
+try {
+  if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+    broadcastChannel = new BroadcastChannel('attc_realtime_sync_channel');
+    broadcastChannel.onmessage = (event) => {
+      if (event.data && event.data.type) {
+        notifyListeners(event.data);
+      }
+    };
+  }
+} catch (e) {
+  console.warn('[Realtime] BroadcastChannel init error, falling back to SSE:', e);
+}
+
+// Function to invoke all local subscribers
+function notifyListeners(payload: RealtimeEventPayload) {
+  listeners.forEach((listener) => {
+    try {
+      listener(payload);
+    } catch (err) {
+      console.error('[Realtime] Listener error:', err);
+    }
+  });
+}
+
+// Global dispatch for local + broadcast events
+export const broadcastRealtimeUpdate = (type: RealtimeEventType, detail?: string, count?: number) => {
+  const timestamp = Date.now();
+  const payload: RealtimeEventPayload = {
+    type,
+    timestamp,
+    senderId: TAB_INSTANCE_ID,
+    detail,
+    count,
+  };
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.LAST_UPDATE, JSON.stringify({ timestamp, type, detail }));
+  } catch (e) {
+    // Ignore localStorage quota errors
+  }
+
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage(payload);
+    } catch (err) {
+      console.warn('[Realtime] Broadcast error:', err);
+    }
+  }
+
+  notifyListeners(payload);
+};
+
+export const subscribeRealtimeUpdates = (listener: RealtimeListener): (() => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+
+// ================= CROSS-DEVICE SERVER SSE & HTTP SYNC =================
+let eventSource: EventSource | null = null;
+let isFetchingServer = false;
+let sseReconnectTimer: any = null;
+
+// Connect to Server-Sent Events (SSE) for live multi-device push updates
+export function initCrossDeviceRealtimeSync() {
+  if (typeof window === 'undefined' || !('EventSource' in window)) return;
+
+  // Cleanup old connection
+  if (eventSource) {
+    try {
+      eventSource.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    eventSource = new EventSource('/api/events');
+
+    eventSource.onopen = () => {
+      console.log('[Multi-Device Sync] Connected to central real-time server stream');
+      // Fetch latest snapshot upon establishing connection
+      fetchDataFromServer(false);
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.type === 'connected') {
+          return;
+        }
+
+        // When any device updates the server, refresh local cached data
+        fetchDataFromServer(true, payload.detail);
+      } catch (err) {
+        console.error('[Multi-Device Sync] Error parsing SSE event:', err);
+      }
+    };
+
+    eventSource.onerror = () => {
+      console.warn('[Multi-Device Sync] SSE disconnected, attempting reconnect in 3s...');
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = setTimeout(() => {
+        initCrossDeviceRealtimeSync();
+      }, 3000);
+    };
+  } catch (e) {
+    console.error('[Multi-Device Sync] Failed to initialize SSE:', e);
+  }
+}
+
+// Fetch all fresh data from server and synchronize local cache
+export async function fetchDataFromServer(notify = true, customDetail?: string) {
+  if (isFetchingServer || typeof window === 'undefined') return;
+  isFetchingServer = true;
+
+  try {
+    const res = await fetch('/api/data', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.students && Array.isArray(data.students)) {
+        localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(data.students));
+      }
+      if (data.advisors && Array.isArray(data.advisors)) {
+        localStorage.setItem(STORAGE_KEYS.ADVISORS, JSON.stringify(data.advisors));
+      }
+      if (data.config) {
+        localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config));
+      }
+      localStorage.setItem(STORAGE_KEYS.SERVER_SYNC_TIME, String(Date.now()));
+
+      if (notify) {
+        broadcastRealtimeUpdate('students_updated', customDetail || 'ซิงค์ข้อมูลจากเซิร์ฟเวอร์แบบเรียลไทม์', data.students?.length);
+      }
+    }
+  } catch (err) {
+    console.warn('[Multi-Device Sync] Server fetch skipped (using local cache):', err);
+  } finally {
+    isFetchingServer = false;
+  }
+}
+
+// Setup background live sync loop & window focus trigger
+if (typeof window !== 'undefined') {
+  // 1. Start SSE stream immediately
+  initCrossDeviceRealtimeSync();
+
+  // 2. Initial fetch
+  fetchDataFromServer(false);
+
+  // 3. Fallback periodic polling every 6 seconds to ensure cross-device consistency
+  setInterval(() => {
+    fetchDataFromServer(false);
+  }, 6000);
+
+  // 4. Re-sync when user refocuses browser/phone screen
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      fetchDataFromServer(true, 'รีเฟรชข้อมูลล่าสุดอัตโนมัติ');
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+        initCrossDeviceRealtimeSync();
+      }
+    }
+  });
+
+  // 5. Cross-tab storage fallback
+  window.addEventListener('storage', (e) => {
+    if (e.key && Object.values(STORAGE_KEYS).includes(e.key)) {
+      const payload: RealtimeEventPayload = {
+        type: e.key === STORAGE_KEYS.STUDENTS ? 'students_updated' :
+              e.key === STORAGE_KEYS.ADVISORS ? 'advisors_updated' : 'config_updated',
+        timestamp: Date.now(),
+        detail: `Storage key ${e.key} changed`,
+      };
+      notifyListeners(payload);
+    }
+  });
+}
+
+// ================= DATA GETTERS & SETTERS =================
+
+export const getStoredAdvisors = (): AdvisorAccount[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.ADVISORS);
+    if (!raw) {
+      localStorage.setItem(STORAGE_KEYS.ADVISORS, JSON.stringify(INITIAL_ADVISORS));
+      return INITIAL_ADVISORS;
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_ADVISORS;
+  } catch (err) {
+    console.error('Failed to load advisors:', err);
+    return INITIAL_ADVISORS;
+  }
+};
+
+export const saveAllAdvisors = (advisors: AdvisorAccount[], notify = true) => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.ADVISORS, JSON.stringify(advisors));
+    if (notify) {
+      broadcastRealtimeUpdate('advisors_updated', `บันทึกข้อมูลครูที่ปรึกษา (${advisors.length} ท่าน)`, advisors.length);
+    }
+  } catch (err) {
+    console.error('Failed to save advisors:', err);
+  }
+};
+
+export const updateAdvisorRecord = (updated: AdvisorAccount): AdvisorAccount[] => {
+  const current = getStoredAdvisors();
+  const index = current.findIndex(a => (updated.id && a.id === updated.id) || a.username === updated.username);
+  let nextList: AdvisorAccount[];
+
+  if (index >= 0) {
+    nextList = [...current];
+    nextList[index] = { ...nextList[index], ...updated };
+  } else {
+    nextList = [
+      ...current,
+      { ...updated, id: updated.id || `adv-${Date.now()}` }
+    ];
+  }
+
+  saveAllAdvisors(nextList, true);
+
+  // Sync to server
+  fetch('/api/advisors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updated),
+  }).catch(e => console.warn('Failed to push advisor update to server:', e));
+
+  return nextList;
+};
+
+export const deleteAdvisorRecord = (idOrUsername: string): AdvisorAccount[] => {
+  const current = getStoredAdvisors();
+  const nextList = current.filter(a => a.id !== idOrUsername && a.username !== idOrUsername);
+  saveAllAdvisors(nextList, true);
+
+  // Sync to server
+  fetch(`/api/advisors/${encodeURIComponent(idOrUsername)}`, {
+    method: 'DELETE',
+  }).catch(e => console.warn('Failed to push advisor delete to server:', e));
+
+  return nextList;
 };
 
 export const getStoredStudents = (): StudentRecord[] => {
@@ -16,14 +298,17 @@ export const getStoredStudents = (): StudentRecord[] => {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_STUDENTS;
   } catch (err) {
-    console.error('Failed to load students from localStorage:', err);
+    console.error('Failed to load students:', err);
     return INITIAL_STUDENTS;
   }
 };
 
-export const saveAllStudents = (students: StudentRecord[]) => {
+export const saveAllStudents = (students: StudentRecord[], notify = true) => {
   try {
     localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+    if (notify) {
+      broadcastRealtimeUpdate('students_updated', `อัปเดตข้อมูลนักเรียน (${students.length} รายการ)`, students.length);
+    }
   } catch (err) {
     console.error('Failed to save students:', err);
   }
@@ -39,8 +324,8 @@ export const updateStudentRecord = (updated: StudentRecord): StudentRecord[] => 
     nextList[index] = {
       ...nextList[index],
       ...updated,
-      isUpdated: true,
-      updatedAt: updated.updatedAt || new Date().toLocaleString('th-TH'),
+      isUpdated: updated.isUpdated !== undefined ? updated.isUpdated : true,
+      updatedAt: updated.updatedAt !== undefined ? updated.updatedAt : (updated.isUpdated ? new Date().toLocaleString('th-TH') : null),
     };
   } else {
     nextList = [
@@ -48,46 +333,129 @@ export const updateStudentRecord = (updated: StudentRecord): StudentRecord[] => 
       {
         ...updated,
         id: updated.id || `std-${Date.now()}`,
-        isUpdated: true,
-        updatedAt: updated.updatedAt || new Date().toLocaleString('th-TH'),
+        isUpdated: updated.isUpdated !== undefined ? updated.isUpdated : false,
+        updatedAt: updated.updatedAt || (updated.isUpdated ? new Date().toLocaleString('th-TH') : null),
       }
     ];
   }
   
-  saveAllStudents(nextList);
+  saveAllStudents(nextList, false);
+  const actionText = index >= 0 ? 'แก้ไขข้อมูลสำเร็จ' : 'เพิ่มข้อมูลใหม่สำเร็จ';
+  broadcastRealtimeUpdate('students_updated', `นักศึกษา ${updated.prefix}${updated.fullName} (${updated.studentId}) ${actionText}`, nextList.length);
+
+  // Sync to central server (which broadcasts via SSE to all other devices/browsers)
+  fetch('/api/students', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updated),
+  }).catch(e => console.warn('Failed to push student update to server:', e));
+
   return nextList;
+};
+
+export const forceServerSync = (): { students: StudentRecord[]; advisors: AdvisorAccount[]; config: SystemConfig } => {
+  // Trigger immediate server fetch
+  fetchDataFromServer(false);
+
+  const students = getStoredStudents();
+  const advisors = getStoredAdvisors();
+  const config = getStoredConfig();
+  
+  broadcastRealtimeUpdate('students_updated', `รีเฟรชและซิงค์ฐานข้อมูลทั้งเซิร์ฟเวอร์เรียบร้อย (${students.length} รายการ)`, students.length);
+  return { students, advisors, config };
 };
 
 export const deleteStudentRecord = (id: string): StudentRecord[] => {
   const current = getStoredStudents();
   const nextList = current.filter(s => s.id !== id && s.studentId !== id);
-  saveAllStudents(nextList);
+  saveAllStudents(nextList, true);
+
+  // Sync delete to server
+  fetch(`/api/students/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }).catch(e => console.warn('Failed to push student delete to server:', e));
+
   return nextList;
 };
 
 export const resetStudentRecord = (id: string): StudentRecord[] => {
   const current = getStoredStudents();
-  const nextList = current.map(s => {
-    if (s.id === id || s.studentId === id) {
-      return {
-        ...s,
-        isUpdated: false,
-        updatedAt: null,
-        currentStatus: 'not_updated' as const,
-        workplaceName: undefined,
-        jobPosition: undefined,
-        monthlyIncome: undefined,
-        jobMatch: undefined,
-        province: undefined,
-        furtherStudyLevel: undefined,
-        institution: undefined,
-        facultyMajor: undefined,
-        unemployedReason: undefined,
-      };
-    }
-    return s;
-  });
-  saveAllStudents(nextList);
+  const index = current.findIndex(s => s.id === id || s.studentId === id);
+  if (index >= 0) {
+    const nextList = [...current];
+    nextList[index] = {
+      ...nextList[index],
+      isUpdated: false,
+      updatedAt: null,
+      currentStatus: 'not_updated',
+      workplaceName: undefined,
+      jobPosition: undefined,
+      monthlyIncome: undefined,
+      jobMatch: undefined,
+      province: undefined,
+      furtherStudyLevel: undefined,
+      institution: undefined,
+      facultyMajor: undefined,
+      unemployedReason: undefined,
+      notes: undefined,
+    };
+    saveAllStudents(nextList, true);
+
+    // Sync to server
+    fetch(`/api/students/${encodeURIComponent(id)}/reset`, {
+      method: 'POST',
+    }).catch(e => console.warn('Failed to push student reset to server:', e));
+
+    return nextList;
+  }
+  return current;
+};
+
+export const batchImportStudents = (
+  imported: StudentRecord[],
+  mode: 'merge' | 'replace'
+): StudentRecord[] => {
+  let nextList: StudentRecord[];
+
+  if (mode === 'replace') {
+    nextList = imported;
+  } else {
+    // Merge Mode
+    const current = getStoredStudents();
+    const studentMap = new Map<string, StudentRecord>();
+
+    current.forEach(s => {
+      studentMap.set(s.studentId, s);
+    });
+
+    imported.forEach(imp => {
+      const existing = studentMap.get(imp.studentId);
+      if (existing) {
+        studentMap.set(imp.studentId, {
+          ...existing,
+          ...imp,
+          id: existing.id || imp.id,
+          isUpdated: imp.isUpdated !== undefined ? imp.isUpdated : existing.isUpdated,
+          updatedAt: imp.updatedAt || existing.updatedAt,
+        });
+      } else {
+        studentMap.set(imp.studentId, imp);
+      }
+    });
+
+    nextList = Array.from(studentMap.values());
+  }
+
+  saveAllStudents(nextList, false);
+  broadcastRealtimeUpdate('batch_imported', `นำเข้าข้อมูลนักศึกษาเรียบร้อย (${nextList.length} รายการ)`, nextList.length);
+
+  // Sync batch to server
+  fetch('/api/students/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ students: imported, mode }),
+  }).catch(e => console.warn('Failed to push batch import to server:', e));
+
   return nextList;
 };
 
@@ -98,7 +466,11 @@ export const getStoredConfig = (): SystemConfig => {
       localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(DEFAULT_CONFIG));
       return DEFAULT_CONFIG;
     }
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    if (parsed.systemTitle === 'ศูนย์บริหารจัดการข้อมูลภาวะการมีงานทำ (วิทยาลัยเทคนิคอ่างทอง)' || !parsed.systemTitle) {
+      parsed.systemTitle = DEFAULT_CONFIG.systemTitle;
+    }
+    return { ...DEFAULT_CONFIG, ...parsed, realtimeSyncEnabled: true };
   } catch (err) {
     console.error('Failed to load system config:', err);
     return DEFAULT_CONFIG;
@@ -107,19 +479,39 @@ export const getStoredConfig = (): SystemConfig => {
 
 export const saveStoredConfig = (config: Partial<SystemConfig>): SystemConfig => {
   const current = getStoredConfig();
-  const next = { ...current, ...config, lastSyncedAt: new Date().toLocaleString('th-TH') };
+  const next: SystemConfig = { 
+    ...current, 
+    ...config, 
+    realtimeSyncEnabled: true,
+    lastRealtimeUpdateAt: new Date().toLocaleString('th-TH') 
+  };
   try {
     localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(next));
+    broadcastRealtimeUpdate('config_updated', 'อัปเดตการตั้งค่าระบบเรียลไทม์');
   } catch (err) {
     console.error('Failed to save config:', err);
   }
+
+  // Sync config to server
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }).catch(e => console.warn('Failed to push config update to server:', e));
+
   return next;
 };
 
-export const resetToInitialData = (): { students: StudentRecord[]; config: SystemConfig } => {
+export const resetToInitialData = (): { students: StudentRecord[]; config: SystemConfig; advisors: AdvisorAccount[] } => {
   localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(INITIAL_STUDENTS));
   localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(DEFAULT_CONFIG));
-  return { students: INITIAL_STUDENTS, config: DEFAULT_CONFIG };
+  localStorage.setItem(STORAGE_KEYS.ADVISORS, JSON.stringify(INITIAL_ADVISORS));
+  broadcastRealtimeUpdate('data_reset', 'รีเซ็ตฐานข้อมูลเป็นค่าเริ่มต้นสำหรับการสาธิต');
+
+  // Sync reset to server
+  fetch('/api/reset', { method: 'POST' }).catch(e => console.warn('Failed to push reset to server:', e));
+
+  return { students: INITIAL_STUDENTS, config: DEFAULT_CONFIG, advisors: INITIAL_ADVISORS };
 };
 
 // Export CSV with UTF-8 BOM so Excel opens Thai properly without mojibake
@@ -215,126 +607,7 @@ export const generateLineReminderText = (
 ⚠️ พบรายชื่อที่ยังไม่ได้บันทึกข้อมูลภาวะการมีงานทำและการศึกษาต่อ (คงเหลือ ${count} คน):
 ${listText}${moreNotice}
 
-👉 ขอให้นักศึกษาเข้าสู่ระบบเพื่อบันทึกข้อมูลด่วนที่ระบบติดตามงาน:
+👉 ขอให้นักศึกษาเข้าสู่ระบบเพื่อบันทึกข้อมูลด่วนที่ระบบติดตามงาน (อัปเดตเรียลไทม์):
 เข้าสู่ระบบด้วย: รหัสนักศึกษา 11 หลัก (ทั้ง Username และ Password)
 🙏 ขอบคุณสำหรับความร่วมมือครับ/ค่ะ`;
-};
-
-export const generateGoogleAppsScriptCode = (collegeName: string, systemTitle: string): string => {
-  return `/**
- * Google Apps Script WebApp Backend
- * ${systemTitle} - ${collegeName}
- * นำโค้ดนี้ไปวางใน Extensions > Apps Script ใน Google Sheet ของท่าน
- */
-
-function doGet(e) {
-  var action = e && e.parameter ? e.parameter.action : 'read';
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  if (action === 'getConfig') {
-    var configSheet = ss.getSheetByName('Config') || ss.getSheets()[0];
-    var data = {
-      collegeName: "${collegeName}",
-      systemTitle: "${systemTitle}",
-      academicYear: "2567",
-      status: "online"
-    };
-    return ContentService.createTextOutput(JSON.stringify(data))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  
-  // Default: Read students
-  var sheet = ss.getSheetByName('Students') || ss.getSheets()[0];
-  var rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) {
-    return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
-  }
-  
-  var headers = rows[0];
-  var students = [];
-  for (var i = 1; i < rows.length; i++) {
-    var row = rows[i];
-    var obj = {};
-    for (var j = 0; j < headers.length; j++) {
-      obj[headers[j]] = row[j];
-    }
-    students.push(obj);
-  }
-  
-  return ContentService.createTextOutput(JSON.stringify(students))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  try {
-    var contents = JSON.parse(e.postData.contents);
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName('Students') || ss.getActiveSheet();
-    
-    if (contents.action === 'updateConfig') {
-      var configSheet = ss.getSheetByName('Config') || ss.insertSheet('Config');
-      configSheet.getRange('A1:B1').setValues([['Key', 'Value']]);
-      configSheet.getRange('A2:B2').setValues([['collegeName', contents.config.collegeName]]);
-      configSheet.getRange('A3:B3').setValues([['systemTitle', contents.config.systemTitle]]);
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Updated Config' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Batch save or single student update
-    if (contents.action === 'saveStudent') {
-      var student = contents.student;
-      var data = sheet.getDataRange().getValues();
-      var foundRow = -1;
-      
-      for (var i = 1; i < data.length; i++) {
-        if (String(data[i][1]) === String(student.studentId)) { // Column B = studentId
-          foundRow = i + 1;
-          break;
-        }
-      }
-      
-      var rowData = [
-        student.id || Utilities.getUuid(),
-        student.studentId,
-        student.prefix,
-        student.fullName,
-        student.educationLevel,
-        student.studyGroup,
-        student.vocationalCategory,
-        student.department,
-        student.studySystem,
-        student.phone,
-        student.lineId,
-        student.isUpdated ? 'YES' : 'NO',
-        student.updatedAt || new Date().toISOString(),
-        student.currentStatus,
-        student.workplaceName || '',
-        student.jobPosition || '',
-        student.monthlyIncome || '',
-        student.jobMatch || '',
-        student.province || '',
-        student.furtherStudyLevel || '',
-        student.institution || '',
-        student.facultyMajor || '',
-        student.unemployedReason || ''
-      ];
-      
-      if (foundRow > 0) {
-        sheet.getRange(foundRow, 1, 1, rowData.length).setValues([rowData]);
-      } else {
-        sheet.appendRow(rowData);
-      }
-      
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'Saved successfully' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({ success: false, message: 'Unknown action' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-`;
 };

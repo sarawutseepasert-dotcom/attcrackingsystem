@@ -29,6 +29,19 @@ export const VOCATIONAL_DEPARTMENTS: Record<VocationalCategory, string[]> = {
   ],
 };
 
+export const INITIAL_ADVISORS: AdvisorAccount[] = [
+  { id: 'adv-1', username: 'ช.3ชย.1', name: 'อ.สมคิด วิศวกรรม', department: 'ช่างยนต์', studyGroup: 'ช.3ชย.1', category: 'อุตสาหกรรม', phone: '081-998-1122', email: 'somkid@attc.ac.th' },
+  { id: 'adv-2', username: 'ช.3ชย.2', name: 'อ.ประเสริฐ ยานยนต์', department: 'ช่างยนต์', studyGroup: 'ช.3ชย.2', category: 'อุตสาหกรรม', phone: '082-334-5566', email: 'prasert@attc.ac.th' },
+  { id: 'adv-3', username: 'ส.2ชฟ.1', name: 'อ.วิชัย ไฟฟ้าเลิศ', department: 'ช่างไฟฟ้า', studyGroup: 'ส.2ชฟ.1', category: 'อุตสาหกรรม', phone: '083-445-6677', email: 'wichai@attc.ac.th' },
+  { id: 'adv-4', username: 'ส.2ชอ.1', name: 'อ.นภาภรณ์ สัญญาณ', department: 'ช่างอิเล็กทรอนิกส์', studyGroup: 'ส.2ชอ.1', category: 'อุตสาหกรรม', phone: '084-556-7788', email: 'napaporn@attc.ac.th' },
+  { id: 'adv-5', username: 'ส.2บค.1', name: 'อ.วรรณภา การเงินดี', department: 'การบัญชี', studyGroup: 'ส.2บค.1', category: 'บริหารธุรกิจ', phone: '085-667-8899', email: 'wannapa@attc.ac.th' },
+  { id: 'adv-6', username: 'ช.3บต.1', name: 'อ.สุจิตรา ค้าขายรุ่ง', department: 'การตลาด', studyGroup: 'ช.3บต.1', category: 'บริหารธุรกิจ', phone: '086-778-9900', email: 'suchitra@attc.ac.th' },
+  { id: 'adv-7', username: 'ส.2ทธ.1', name: 'อ.ธนากร ดิจิทัลไทย', department: 'เทคโนโลยีธุรกิจดิจิทัล', studyGroup: 'ส.2ทธ.1', category: 'เทคโนโลยีธุรกิจดิจิทัล', phone: '087-889-0011', email: 'thanakorn.d@attc.ac.th' },
+  { id: 'adv-8', username: 'ช.3ชค.1', name: 'อ.อเนก สร้างเมือง', department: 'ช่างก่อสร้าง', studyGroup: 'ช.3ชค.1', category: 'อุตสาหกรรม', phone: '088-990-1122', email: 'anake@attc.ac.th' },
+  { id: 'adv-9', username: 'ส.2คก.1', name: 'อ.มัลลิกา ครัวไทย', department: 'อาหารและโภชนาการ', studyGroup: 'ส.2คก.1', category: 'คหกรรม', phone: '089-001-2233', email: 'mallika@attc.ac.th' },
+  { id: 'adv-10', username: 'ส.2ทว.1', name: 'อ.เชษฐา เชื่อมเหล็ก', department: 'เทคโนโลยีงานเชื่อม', studyGroup: 'ส.2ทว.1', category: 'อุตสาหกรรม', phone: '090-112-3344', email: 'chettha@attc.ac.th' },
+];
+
 export const STUDY_GROUPS_LIST = [
   { code: 'ช.3ชย.1', name: 'ปวช.3 ช่างยนต์ กลุ่ม 1', dept: 'ช่างยนต์', cat: 'อุตสาหกรรม' as VocationalCategory, advisor: 'อ.สมคิด วิศวกรรม' },
   { code: 'ช.3ชย.2', name: 'ปวช.3 ช่างยนต์ กลุ่ม 2', dept: 'ช่างยนต์', cat: 'อุตสาหกรรม' as VocationalCategory, advisor: 'อ.ประเสริฐ ยานยนต์' },
@@ -74,10 +87,8 @@ export const DEFAULT_CONFIG: SystemConfig = {
   contactPhone: '035-611-198',
   contactEmail: 'guidance@attc.ac.th',
   surveyDeadline: '2026-09-30',
-  googleSheetUrl: 'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit',
-  googleSheetId: '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
-  googleWebAppScriptUrl: '',
-  lastSyncedAt: new Date().toLocaleString('th-TH'),
+  realtimeSyncEnabled: true,
+  lastRealtimeUpdateAt: new Date().toLocaleString('th-TH'),
   autoSync: true,
 };
 
